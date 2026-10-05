@@ -14,13 +14,13 @@
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            height: 100vh;
+            min-height: 100vh;
             overflow: hidden;
-            touch-action: none; /* スマホでの画面スクロールや拡大を防止 */
+            touch-action: none;
         }
         h1 {
             margin: 5px 0;
-            font-size: 1.3rem;
+            font-size: 1.2rem;
             color: #e94560;
         }
         #game-container {
@@ -29,23 +29,24 @@
             border-radius: 12px;
             overflow: hidden;
             border: 4px solid #16213e;
-            max-width: 92vw;
-            max-height: 72vh;
+            width: 90vw;
+            max-width: 380px;
+            aspect-ratio: 2 / 3; /* スマホでも縦横比を絶対に崩さず、全体を表示 */
         }
         canvas {
             display: block;
+            width: 100%;
+            height: 100%;
             background: linear-gradient(to bottom, #87CEEB, #2e8b57);
             cursor: crosshair;
-            width: 100%;
-            height: auto;
         }
         .ui {
-            margin-top: 10px;
-            font-size: 0.9rem;
+            margin-top: 8px;
+            font-size: 0.85rem;
             display: flex;
             gap: 10px;
             background: #16213e;
-            padding: 8px 14px;
+            padding: 6px 12px;
             border-radius: 8px;
             border: 2px solid #0f3460;
             align-items: center;
@@ -97,12 +98,13 @@
         progress: 0
     };
 
+    // カエルの位置を少し上に調整し、スマホ画面でも確実に見えるようにする
     const frog = {
         x: canvas.width / 2,
-        y: canvas.height - 40
+        y: canvas.height - 75
     };
 
-    // --- 安全なWeb Audio APIによる効果音 ---
+    // --- Web Audio API による効果音 ---
     let audioCtx = null;
 
     function playSound(type) {
@@ -146,19 +148,20 @@
     class Fly {
         constructor() {
             this.startX = canvas.width / 2 + (Math.random() - 0.5) * 60;
-            this.startY = 180;
+            this.startY = 160;
             this.targetX = Math.random() * (canvas.width - 100) + 50;
-            this.targetY = canvas.height + 20;
+            this.targetY = canvas.height - 30;
             
             this.progress = 0;
-            let speedBonus = timeElapsed * 0.00015;
-            this.speed = 0.0035 + Math.random() * 0.004 + speedBonus;
-            let maxSpeed = 0.015 + (timeElapsed * 0.0003);
+            // 端末の性能に関わらず一定の速度で進むよう調整（秒速ベース）
+            let speedBonus = timeElapsed * 0.012;
+            this.speed = 0.22 + Math.random() * 0.18 + speedBonus;
+            let maxSpeed = 0.85 + (timeElapsed * 0.018);
             if (this.speed > maxSpeed) this.speed = maxSpeed;
         }
 
-        update() {
-            this.progress += this.speed;
+        update(dt) {
+            this.progress += this.speed * dt;
             this.currentX = this.startX + (this.targetX - this.startX) * this.progress;
             this.currentY = this.startY + (this.targetY - this.startY) * this.progress;
             this.size = 8 + this.progress * 24;
@@ -237,12 +240,11 @@
         }
     }
 
-    // スマホのタップ（pointerdown）とPCのクリック両方に対応
+    // スマホのタップ・PCのクリック対応（正確な座標計算）
     canvas.addEventListener('pointerdown', (e) => {
         e.preventDefault();
         const rect = canvas.getBoundingClientRect();
         
-        // 画面上の表示サイズとCanvas内部の解像度の比率を計算（ズレ防止）
         const scaleX = canvas.width / rect.width;
         const scaleY = canvas.height / rect.height;
         const clickX = (e.clientX - rect.left) * scaleX;
@@ -256,7 +258,7 @@
         if (gameState === 'PLAYING' && !tongue.active) {
             tongue.active = true;
             tongue.startX = frog.x;
-            tongue.startY = frog.y;
+            tongue.startY = frog.y - 15; // 口の位置から伸ばす
             tongue.targetX = clickX;
             tongue.targetY = clickY;
             tongue.progress = 0;
@@ -265,10 +267,11 @@
         }
     });
 
-    function update() {
+    function update(dt) {
         if (gameState === 'PLAYING') {
             for (let i = flies.length - 1; i >= 0; i--) {
-                flies[i].update();
+                flies[i].update(dt);
+                // 手前（progress >= 1.0）まで来たらゲームオーバー
                 if (flies[i].progress >= 1.0) {
                     gameOver();
                     break;
@@ -276,7 +279,7 @@
             }
 
             if (tongue.active) {
-                tongue.progress += 0.2;
+                tongue.progress += dt * 5.0; // 舌のスピードも一定に調整
                 if (tongue.progress >= 1) {
                     tongue.progress = 1;
                     tongue.active = false;
@@ -310,12 +313,12 @@
 
         // 道・背景
         ctx.fillStyle = '#228B22';
-        ctx.fillRect(0, 160, canvas.width, 40);
+        ctx.fillRect(0, 140, canvas.width, 40);
 
         ctx.fillStyle = '#1e73be';
         ctx.beginPath();
-        ctx.moveTo(canvas.width / 2 - 25, 200);
-        ctx.lineTo(canvas.width / 2 + 25, 200);
+        ctx.moveTo(canvas.width / 2 - 25, 180);
+        ctx.lineTo(canvas.width / 2 + 25, 180);
         ctx.lineTo(canvas.width + 50, canvas.height);
         ctx.lineTo(-50, canvas.height);
         ctx.closePath();
@@ -330,7 +333,7 @@
             ctx.strokeStyle = '#ff6b81';
             ctx.lineWidth = 5;
             ctx.beginPath();
-            ctx.moveTo(frog.x, frog.y);
+            ctx.moveTo(frog.x, frog.y - 15);
             ctx.lineTo(currentTongueX, currentTongueY);
             ctx.stroke();
 
@@ -340,12 +343,13 @@
             ctx.fill();
         }
 
-        // カエル
+        // カエル（確実に画面内に表示される位置）
         ctx.fillStyle = '#2ed573';
         ctx.beginPath();
         ctx.arc(frog.x, frog.y, 28, 0, Math.PI * 2);
         ctx.fill();
 
+        // 目
         ctx.fillStyle = '#fff';
         ctx.beginPath();
         ctx.arc(frog.x - 12, frog.y - 18, 9, 0, Math.PI * 2);
@@ -389,13 +393,20 @@
         }
     }
 
-    function loop() {
-        update();
+    let lastTime = 0;
+    function loop(timestamp) {
+        if (!lastTime) lastTime = timestamp;
+        let dt = (timestamp - lastTime) / 1000;
+        lastTime = timestamp;
+
+        if (dt > 0.1) dt = 0.1; // ズレ防止のキャップ
+
+        update(dt);
         draw();
         requestAnimationFrame(loop);
     }
 
-    loop();
+    requestAnimationFrame(loop);
 </script>
 </body>
 </html>
