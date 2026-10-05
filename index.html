@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Flog Roll</title>
+    <style>
+        body {
+            margin: 0;
+            background: #1a1a2e;
+            color: #fff;
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+            touch-action: none; /* スマホでの画面スクロールや拡大を防止 */
+        }
+        h1 {
+            margin: 5px 0;
+            font-size: 1.3rem;
+            color: #e94560;
+        }
+        #game-container {
+            position: relative;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            border-radius: 12px;
+            overflow: hidden;
+            border: 4px solid #16213e;
+            max-width: 92vw;
+            max-height: 72vh;
+        }
+        canvas {
+            display: block;
+            background: linear-gradient(to bottom, #87CEEB, #2e8b57);
+            cursor: crosshair;
+            width: 100%;
+            height: auto;
+        }
+        .ui {
+            margin-top: 10px;
+            font-size: 0.9rem;
+            display: flex;
+            gap: 10px;
+            background: #16213e;
+            padding: 8px 14px;
+            border-radius: 8px;
+            border: 2px solid #0f3460;
+            align-items: center;
+        }
+        .ui div span {
+            font-weight: bold;
+            color: #e94560;
+        }
+        #highScore.new-record {
+            color: #f1c40f;
+            text-shadow: 0 0 8px rgba(241, 196, 15, 0.8);
+        }
+    </style>
+</head>
+<body>
+    <h1>🐸 Flog Roll 🦟</h1>
+    <div id="game-container">
+        <canvas id="gameCanvas" width="400" height="600"></canvas>
+    </div>
+    <div class="ui">
+        <div>スコア: <span id="score">0</span></div>
+        <div>難易度: <span id="level">Lv.1</span></div>
+        <div>ハイスコア: <span id="highScore">0</span></div>
+    </div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const scoreEl = document.getElementById('score');
+    const levelEl = document.getElementById('level');
+    const highScoreEl = document.getElementById('highScore');
+
+    let score = 0;
+    let highScore = localStorage.getItem('flogRollHighScore') || 0;
+    highScoreEl.textContent = highScore;
+
+    let gameState = 'START'; // START, PLAYING, GAMEOVER
+    let timeElapsed = 0;
+    let gameTimer = null;
+    let spawnTimeout = null;
+
+    let flies = [];
+    let tongue = {
+        active: false,
+        startX: 0,
+        startY: 0,
+        targetX: 0,
+        targetY: 0,
+        progress: 0
+    };
+
+    const frog = {
+        x: canvas.width / 2,
+        y: canvas.height - 40
+    };
+
+    // --- 安全なWeb Audio APIによる効果音 ---
+    let audioCtx = null;
+
+    function playSound(type) {
+        try {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+
+            const now = audioCtx.currentTime;
+
+            if (type === 'tongue') {
+                // ペロン♪
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(250, now);
+                osc.frequency.exponentialRampToValueAtTime(700, now + 0.12);
+                gain.gain.setValueAtTime(0.15, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + 0.12);
+                osc.start(now);
+                osc.stop(now + 0.12);
+            } else if (type === 'catch') {
+                // キャッチ！
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(500, now);
+                osc.frequency.exponentialRampToValueAtTime(900, now + 0.08);
+                gain.gain.setValueAtTime(0.15, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + 0.08);
+                osc.start(now);
+                osc.stop(now + 0.08);
+            }
+        } catch (e) {}
+    }
+
+    class Fly {
+        constructor() {
+            this.startX = canvas.width / 2 + (Math.random() - 0.5) * 60;
+            this.startY = 180;
+            this.targetX = Math.random() * (canvas.width - 100) + 50;
+            this.targetY = canvas.height + 20;
+            
+            this.progress = 0;
+            let speedBonus = timeElapsed * 0.00015;
+            this.speed = 0.0035 + Math.random() * 0.004 + speedBonus;
+            let maxSpeed = 0.015 + (timeElapsed * 0.0003);
+            if (this.speed > maxSpeed) this.speed = maxSpeed;
+        }
+
+        update() {
+            this.progress += this.speed;
+            this.currentX = this.startX + (this.targetX - this.startX) * this.progress;
+            this.currentY = this.startY + (this.targetY - this.startY) * this.progress;
+            this.size = 8 + this.progress * 24;
+        }
+
+        draw() {
+            ctx.save();
+            ctx.translate(this.currentX, this.currentY);
+            ctx.fillStyle = '#333';
+            ctx.beginPath();
+            ctx.arc(0, 0, this.size * 0.5, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+            ctx.beginPath();
+            ctx.ellipse(-this.size * 0.4, -this.size * 0.3, this.size * 0.4, this.size * 0.2, -Math.PI / 4, 0, Math.PI * 2);
+            ctx.ellipse(this.size * 0.4, -this.size * 0.3, this.size * 0.4, this.size * 0.2, Math.PI / 4, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+        }
+    }
+
+    function startGame() {
+        score = 0;
+        timeElapsed = 0;
+        flies = [];
+        gameState = 'PLAYING';
+        scoreEl.textContent = score;
+        levelEl.textContent = 'Lv.1';
+        highScoreEl.classList.remove('new-record');
+        highScoreEl.textContent = highScore;
+
+        if (gameTimer) clearInterval(gameTimer);
+        if (spawnTimeout) clearTimeout(spawnTimeout);
+
+        gameTimer = setInterval(() => {
+            if (gameState === 'PLAYING') {
+                timeElapsed++;
+                score += 10;
+                scoreEl.textContent = score;
+
+                let currentLevel = Math.floor(timeElapsed / 5) + 1;
+                levelEl.textContent = `Lv.${currentLevel}`;
+            }
+        }, 1000);
+
+        scheduleNextSpawn();
+    }
+
+    function scheduleNextSpawn() {
+        if (gameState !== 'PLAYING') return;
+
+        flies.push(new Fly());
+
+        if (timeElapsed >= 10 && Math.random() < 0.35) {
+            flies.push(new Fly());
+        }
+        if (timeElapsed >= 25 && Math.random() < 0.4) {
+            flies.push(new Fly());
+        }
+
+        let nextInterval = Math.max(350, 1400 - (timeElapsed * 45));
+        spawnTimeout = setTimeout(scheduleNextSpawn, nextInterval);
+    }
+
+    function gameOver() {
+        gameState = 'GAMEOVER';
+        clearInterval(gameTimer);
+        if (spawnTimeout) clearTimeout(spawnTimeout);
+
+        if (score > highScore) {
+            highScore = score;
+            localStorage.setItem('flogRollHighScore', highScore);
+            highScoreEl.textContent = highScore;
+            highScoreEl.classList.add('new-record');
+        }
+    }
+
+    // スマホのタップ（pointerdown）とPCのクリック両方に対応
+    canvas.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        const rect = canvas.getBoundingClientRect();
+        
+        // 画面上の表示サイズとCanvas内部の解像度の比率を計算（ズレ防止）
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        const clickX = (e.clientX - rect.left) * scaleX;
+        const clickY = (e.clientY - rect.top) * scaleY;
+
+        if (gameState === 'START' || gameState === 'GAMEOVER') {
+            startGame();
+            return;
+        }
+
+        if (gameState === 'PLAYING' && !tongue.active) {
+            tongue.active = true;
+            tongue.startX = frog.x;
+            tongue.startY = frog.y;
+            tongue.targetX = clickX;
+            tongue.targetY = clickY;
+            tongue.progress = 0;
+
+            playSound('tongue');
+        }
+    });
+
+    function update() {
+        if (gameState === 'PLAYING') {
+            for (let i = flies.length - 1; i >= 0; i--) {
+                flies[i].update();
+                if (flies[i].progress >= 1.0) {
+                    gameOver();
+                    break;
+                }
+            }
+
+            if (tongue.active) {
+                tongue.progress += 0.2;
+                if (tongue.progress >= 1) {
+                    tongue.progress = 1;
+                    tongue.active = false;
+                }
+
+                let currentTongueX = tongue.startX + (tongue.targetX - tongue.startX) * tongue.progress;
+                let currentTongueY = tongue.startY + (tongue.targetY - tongue.startY) * tongue.progress;
+
+                for (let i = flies.length - 1; i >= 0; i--) {
+                    let fly = flies[i];
+                    let dx = fly.currentX - currentTongueX;
+                    let dy = fly.currentY - currentTongueY;
+                    let dist = Math.sqrt(dx * dx + dy * dy);
+
+                    if (dist < fly.size + 12) {
+                        flies.splice(i, 1);
+                        score += 50;
+                        scoreEl.textContent = score;
+                        tongue.active = false;
+
+                        playSound('catch');
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // 道・背景
+        ctx.fillStyle = '#228B22';
+        ctx.fillRect(0, 160, canvas.width, 40);
+
+        ctx.fillStyle = '#1e73be';
+        ctx.beginPath();
+        ctx.moveTo(canvas.width / 2 - 25, 200);
+        ctx.lineTo(canvas.width / 2 + 25, 200);
+        ctx.lineTo(canvas.width + 50, canvas.height);
+        ctx.lineTo(-50, canvas.height);
+        ctx.closePath();
+        ctx.fill();
+
+        flies.forEach(fly => fly.draw());
+
+        if (tongue.active) {
+            let currentTongueX = tongue.startX + (tongue.targetX - tongue.startX) * tongue.progress;
+            let currentTongueY = tongue.startY + (tongue.targetY - tongue.startY) * tongue.progress;
+            
+            ctx.strokeStyle = '#ff6b81';
+            ctx.lineWidth = 5;
+            ctx.beginPath();
+            ctx.moveTo(frog.x, frog.y);
+            ctx.lineTo(currentTongueX, currentTongueY);
+            ctx.stroke();
+
+            ctx.fillStyle = '#ff4757';
+            ctx.beginPath();
+            ctx.arc(currentTongueX, currentTongueY, 7, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        // カエル
+        ctx.fillStyle = '#2ed573';
+        ctx.beginPath();
+        ctx.arc(frog.x, frog.y, 28, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = '#fff';
+        ctx.beginPath();
+        ctx.arc(frog.x - 12, frog.y - 18, 9, 0, Math.PI * 2);
+        ctx.arc(frog.x + 12, frog.y - 18, 9, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = '#000';
+        ctx.beginPath();
+        ctx.arc(frog.x - 12, frog.y - 18, 3.5, 0, Math.PI * 2);
+        ctx.arc(frog.x + 12, frog.y - 18, 3.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        // スタート画面オーバーレイ
+        if (gameState === 'START') {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.fillStyle = '#fff';
+            ctx.font = 'bold 22px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('🐸 Flog Roll 🦟', canvas.width / 2, canvas.height / 2 - 40);
+            ctx.font = '15px sans-serif';
+            ctx.fillText('画面をタップしてスタート！', canvas.width / 2, canvas.height / 2 + 10);
+            ctx.fillText('ペロンと舌を伸ばしてハエをキャッチしよう', canvas.width / 2, canvas.height / 2 + 45);
+        } 
+        // ゲームオーバー画面オーバーレイ
+        else if (gameState === 'GAMEOVER') {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.fillStyle = '#ff4757';
+            ctx.font = 'bold 28px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('GAME OVER', canvas.width / 2, canvas.height / 2 - 40);
+
+            ctx.fillStyle = '#fff';
+            ctx.font = '18px sans-serif';
+            ctx.fillText(`スコア: ${score}`, canvas.width / 2, canvas.height / 2 + 10);
+            ctx.font = '15px sans-serif';
+            ctx.fillText('タップしてもう一度プレイ', canvas.width / 2, canvas.height / 2 + 55);
+        }
+    }
+
+    function loop() {
+        update();
+        draw();
+        requestAnimationFrame(loop);
+    }
+
+    loop();
+</script>
+</body>
+</html>
